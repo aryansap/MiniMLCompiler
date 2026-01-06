@@ -106,10 +106,62 @@ class IRGraph:
                 raise NotImplementedError(f"Unsupported FX node.op: {node.op}")
 
     def fusion_pass(self):
-        #do fusion pass on member variables here 
-        #maybe do some kind of stack thing wher you have a stack of operations, 
-        # once you see matmul, add, gelu, pop the 3 and add the fused verison 
-        pass
+          # 1) Build use counts for tensors (by name)
+        uses: dict[str, int] = {}
+        for o in self.ops:
+            for t in o.inputs:
+                uses[t.name] = uses.get(t.name, 0) + 1
+
+        new_ops: list[Op] = []
+        i = 0
+
+        # 2) Scan ops in order
+        while i < len(self.ops):
+            # Need at least 3 ops to match a 3-op fusion pattern
+            if i + 2 < len(self.ops):
+                op0 = self.ops[i]
+                op1 = self.ops[i + 1]
+                op2 = self.ops[i + 2]
+
+                if op0.op_type == "MATMUL" and op1.op_type == "ADD" and op2.op_type == "GELU":
+                    matmul_out = op0.output
+                    add_out = op1.output
+
+                    add_inputs = op1.inputs
+                    matmul_feeds_add = (add_inputs[0].name == matmul_out.name) or (add_inputs[1].name == matmul_out.name)
+
+                    # Check GELU consumes ADD output (GELU should have exactly 1 tensor input in your IR)
+                    gelu_inputs = op2.inputs
+                    add_feeds_gelu = (len(gelu_inputs) == 1 and gelu_inputs[0].name == add_out.name)
+
+                    if matmul_feeds_add and add_feeds_gelu:
+                        # Guard: intermediates must not be used elsewhere
+                        if uses.get(matmul_out.name, 0) == 1 and uses.get(add_out.name, 0) == 1:
+                            # Identify bias = the other ADD input
+                            if add_inputs[0].name == matmul_out.name:
+                                bias = add_inputs[1]
+                            else:
+                                bias = add_inputs[0]
+
+                            fused_inputs = [op0.inputs[0], op0.inputs[1], bias]
+                            fused_output = op2.output
+                            fused_attrs = {}
+
+                            fused_op = Op(
+                                op_type="FUSED_MATMUL_BIAS_GELU",
+                                inputs=fused_inputs,
+                                output=fused_output,
+                                attrs=fused_attrs,
+                            )
+                            new_ops.append(fused_op)
+
+                            i += 3
+                            continue
+
+            new_ops.append(self.ops[i])
+            i += 1
+
+        self.ops = new_ops
 
     def execute(self, runtime_inputs):
         #create a map of the names of Tensors to the data
