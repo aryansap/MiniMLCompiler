@@ -163,10 +163,24 @@ class IRGraph:
 
         self.ops = new_ops
 
-    def execute(self, runtime_inputs):
-        #create a map of the names of Tensors to the data
-        #execute ops in the list
-        pass
+    def execute(self, runtime_inputs, backend= "torch"):
+        #runtime_inputs will be loaded in the following manner: 
+        env = {}
+        #figure out how you want inputs to be loaded and load them into environment
+        for op in self.ops:
+            ins = [env[t.name] for t in op.inputs]
+            if op.op_typetype == "MATMUL":
+                out = matmul_impl(ins[0], ins[1])
+            elif op.op_typetype == 'ADD':
+                out = add_impl(ins[0], ins[1])
+            elif op.op_typetype == "GELU": 
+                out = gelu_impl(ins[0])
+            elif op.op_type == "FUSED_MATMUL_BIAS_GELU": 
+                out = fused_impl(ins[0], ins[1], ins[2])
+            env[op.output.name] = out
+        
+        return [env[t.name] for t in self.outputs]
+
     def dump(self):
         print("=== IRGraph Dump ===")
 
